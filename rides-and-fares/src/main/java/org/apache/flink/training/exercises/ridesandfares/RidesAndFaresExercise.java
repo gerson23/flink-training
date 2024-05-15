@@ -19,6 +19,8 @@
 package org.apache.flink.training.exercises.ridesandfares;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -99,19 +101,39 @@ public class RidesAndFaresExercise {
     public static class EnrichmentFunction
             extends RichCoFlatMapFunction<TaxiRide, TaxiFare, RideAndFare> {
 
+        private transient ValueState<TaxiRide> startState;
+        private transient ValueState<TaxiFare> fareState;
+
         @Override
         public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+            startState = getRuntimeContext().getState(new ValueStateDescriptor<>("startState", TaxiRide.class));
+            fareState = getRuntimeContext().getState(new ValueStateDescriptor<>("fareState", TaxiFare.class));
         }
 
         @Override
         public void flatMap1(TaxiRide ride, Collector<RideAndFare> out) throws Exception {
-            throw new MissingSolutionException();
+            TaxiFare taxiFare = fareState.value();
+
+            if (taxiFare == null) {
+                startState.update(ride);
+            }
+            else {
+                out.collect(new RideAndFare(ride, taxiFare));
+                fareState.clear();
+            }
         }
 
         @Override
         public void flatMap2(TaxiFare fare, Collector<RideAndFare> out) throws Exception {
-            throw new MissingSolutionException();
+            TaxiRide startRide = startState.value();
+
+            if (startRide != null) {
+                out.collect(new RideAndFare(startRide, fare));
+                startState.clear();
+            }
+            else {
+                fareState.update(fare);
+            }
         }
     }
 }
