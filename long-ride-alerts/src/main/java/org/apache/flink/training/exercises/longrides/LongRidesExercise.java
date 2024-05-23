@@ -21,6 +21,8 @@ package org.apache.flink.training.exercises.longrides;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -28,12 +30,15 @@ import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
 import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 import org.apache.flink.util.Collector;
 
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalUnit;
 
 /**
  * The "Long Ride Alerts" exercise.
@@ -46,6 +51,7 @@ import java.time.Duration;
 public class LongRidesExercise {
     private final SourceFunction<TaxiRide> source;
     private final SinkFunction<Long> sink;
+    private static long TWO_HOURS_SECONDS = 7200;
 
     /** Creates a job using the source and sink provided. */
     public LongRidesExercise(SourceFunction<TaxiRide> source, SinkFunction<Long> sink) {
@@ -97,18 +103,64 @@ public class LongRidesExercise {
 
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
+        private transient ValueState<TaxiRide> gotEventState;
 
         @Override
         public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+            super.open(config);
+            gotEventState = getRuntimeContext().getState(new ValueStateDescriptor<>("gotEvent", TaxiRide.class));
         }
 
         @Override
-        public void processElement(TaxiRide ride, Context context, Collector<Long> out)
-                throws Exception {}
+        public void processElement(TaxiRide ride, Context context, Collector<Long> out) throws Exception {
+            if (ride.isStart) {
+                // if gets START event and there's no out-of-order END received first (we suppose there's no START duplication)
+                if (gotEventState.value() == null) {
+                    updateTimer("start", context, ride.getEventTimeMillis());
+                    gotEventState.update(ride);
+                }
+                // already got an END event
+                else {
+                    long secondsToEnd = Duration.between(ride.eventTime, gotEventState.value().eventTime).toSeconds();
+                    if (secondsToEnd > TWO_HOURS_SECONDS) {
+                        out.collect(ride.rideId);
+                    }
+                    gotEventState.clear();
+                }
+            }
+            else {
+                // already got an event it shall be a START event
+                if (gotEventState.value() != null) {
+                    long secondsToEnd = Duration.between(gotEventState.value().eventTime, ride.eventTime).toSeconds();
+                    if (secondsToEnd > TWO_HOURS_SECONDS) {
+                        out.collect(ride.rideId);
+                    }
+                    updateTimer("delete", context, gotEventState.value().getEventTimeMillis());
+                    gotEventState.clear();
+                }
+                // store END event for later processing
+                else {
+                    gotEventState.update(ride);
+                }
+            }
+        }
 
         @Override
-        public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out)
-                throws Exception {}
+        public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out) throws Exception {
+            if (gotEventState.value() != null) {
+                out.collect(gotEventState.value().rideId);
+                gotEventState.clear();
+            }
+        }
+
+        private void updateTimer(String command, Context context, Long eventTime) {
+            long timerValue = TimeWindow.getWindowStartWithOffset(eventTime, 0, TWO_HOURS_SECONDS * 1000) + TWO_HOURS_SECONDS * 1000;
+            if (command == "start") {
+                context.timerService().registerEventTimeTimer(timerValue);
+            }
+            else {
+                context.timerService().deleteEventTimeTimer(timerValue);
+            }
+        }
     }
 }
