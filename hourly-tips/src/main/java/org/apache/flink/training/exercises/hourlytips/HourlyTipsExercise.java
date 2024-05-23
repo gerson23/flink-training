@@ -19,15 +19,21 @@
 package org.apache.flink.training.exercises.hourlytips;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.training.exercises.common.datatypes.TaxiFare;
 import org.apache.flink.training.exercises.common.sources.TaxiFareGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
+import org.apache.flink.util.Collector;
 
 /**
  * The Hourly Tips exercise from the Flink training.
@@ -76,18 +82,62 @@ public class HourlyTipsExercise {
         DataStream<TaxiFare> fares = env.addSource(source);
 
         // replace this with your solution
-        if (true) {
-            throw new MissingSolutionException();
+        fares.assignTimestampsAndWatermarks(WatermarkStrategy.<TaxiFare>forMonotonousTimestamps()
+                                                             .withTimestampAssigner((fare, timestamp) -> fare.getEventTimeMillis()))
+             .keyBy(fare -> fare.driverId)
+             .window(TumblingEventTimeWindows.of(Time.hours(1)))
+             .reduce(new HourlyTipsAccumulator(), new HourlyTipsProcessor())
+             .forward()
+             // rekey by timestamp to aggregate all driver within the same window
+             .keyBy(sum -> sum.f0)
+             .window(TumblingEventTimeWindows.of(Time.hours(1)))
+             .process(new HoulyTipsFinalizer())
+             .addSink(sink);
+
+        return env.execute("Hourly Tips");
+    }
+
+    public static class HourlyTipsAccumulator implements ReduceFunction<TaxiFare> {
+        @Override
+        public TaxiFare reduce(TaxiFare tf1, TaxiFare tf2) {
+            tf1.tip += tf2.tip;
+            return tf1;
+        }
+    }
+
+    public static class HourlyTipsProcessor extends ProcessWindowFunction<
+        TaxiFare,
+        Tuple3<Long, Long, Float>, // Timestamp, Driver ID, Tips
+        Long,
+        TimeWindow> {
+
+        @Override
+        public void process(Long key, Context context, Iterable<TaxiFare> fares, Collector<Tuple3<Long, Long, Float>> out) throws Exception {
+            Float sumTips = fares.iterator().next().tip;
+
+            out.collect(Tuple3.of(context.window().getEnd(), key, sumTips));
         }
 
-        // the results should be sent to the sink that was passed in
-        // (otherwise the tests won't work)
-        // you can end the pipeline with something like this:
+    }
 
-        // DataStream<Tuple3<Long, Long, Float>> hourlyMax = ...
-        // hourlyMax.addSink(sink);
+    public static class HoulyTipsFinalizer extends ProcessWindowFunction<
+        Tuple3<Long, Long, Float>,
+        Tuple3<Long, Long, Float>,
+        Long,
+        TimeWindow> {
 
-        // execute the pipeline and return the result
-        return env.execute("Hourly Tips");
+        @Override
+        public void process(Long key, Context context, Iterable<Tuple3<Long, Long, Float>> sums, Collector<Tuple3<Long, Long, Float>> out) throws Exception {
+            Tuple3<Long, Long, Float> maxDriver = new Tuple3<Long, Long, Float>(-1L, -1L, -1F);
+
+            for (Tuple3<Long, Long, Float> driver : sums) {
+                // found a bigger tip
+                if (driver.f2 > maxDriver.f2) {
+                    maxDriver = driver;
+                }
+            }
+
+            out.collect(maxDriver);
+        }
     }
 }
