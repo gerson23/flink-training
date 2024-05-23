@@ -91,7 +91,7 @@ public class HourlyTipsExercise {
              // rekey by timestamp to aggregate all driver within the same window
              .keyBy(sum -> sum.f0)
              .window(TumblingEventTimeWindows.of(Time.hours(1)))
-             .process(new HoulyTipsFinalizer())
+             .maxBy(2)
              .addSink(sink);
 
         return env.execute("Hourly Tips");
@@ -118,26 +118,5 @@ public class HourlyTipsExercise {
             out.collect(Tuple3.of(context.window().getEnd(), key, sumTips));
         }
 
-    }
-
-    public static class HoulyTipsFinalizer extends ProcessWindowFunction<
-        Tuple3<Long, Long, Float>,
-        Tuple3<Long, Long, Float>,
-        Long,
-        TimeWindow> {
-
-        @Override
-        public void process(Long key, Context context, Iterable<Tuple3<Long, Long, Float>> sums, Collector<Tuple3<Long, Long, Float>> out) throws Exception {
-            Tuple3<Long, Long, Float> maxDriver = new Tuple3<Long, Long, Float>(-1L, -1L, -1F);
-
-            for (Tuple3<Long, Long, Float> driver : sums) {
-                // found a bigger tip
-                if (driver.f2 > maxDriver.f2) {
-                    maxDriver = driver;
-                }
-            }
-
-            out.collect(maxDriver);
-        }
     }
 }
