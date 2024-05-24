@@ -87,7 +87,6 @@ public class HourlyTipsExercise {
              .keyBy(fare -> fare.driverId)
              .window(TumblingEventTimeWindows.of(Time.hours(1)))
              .reduce(new HourlyTipsAccumulator(), new HourlyTipsProcessor())
-             .forward()
              // rekey by timestamp to aggregate all driver within the same window
              .keyBy(sum -> sum.f0)
              .window(TumblingEventTimeWindows.of(Time.hours(1)))

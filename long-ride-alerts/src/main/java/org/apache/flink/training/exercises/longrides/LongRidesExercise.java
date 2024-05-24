@@ -33,12 +33,9 @@ import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 import org.apache.flink.util.Collector;
 
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
-import java.time.temporal.TemporalUnit;
 
 /**
  * The "Long Ride Alerts" exercise.
@@ -51,7 +48,7 @@ import java.time.temporal.TemporalUnit;
 public class LongRidesExercise {
     private final SourceFunction<TaxiRide> source;
     private final SinkFunction<Long> sink;
-    private static long TWO_HOURS_SECONDS = 7200;
+    private static long TWO_HOUR_MILLIS = Duration.ofHours(2).toMillis();
 
     /** Creates a job using the source and sink provided. */
     public LongRidesExercise(SourceFunction<TaxiRide> source, SinkFunction<Long> sink) {
@@ -121,8 +118,8 @@ public class LongRidesExercise {
                 }
                 // already got an END event
                 else {
-                    long secondsToEnd = Duration.between(ride.eventTime, gotEventState.value().eventTime).toSeconds();
-                    if (secondsToEnd > TWO_HOURS_SECONDS) {
+                    long secondsToEnd = Duration.between(ride.eventTime, gotEventState.value().eventTime).toMillis();
+                    if (secondsToEnd > TWO_HOUR_MILLIS) {
                         out.collect(ride.rideId);
                     }
                     gotEventState.clear();
@@ -131,8 +128,8 @@ public class LongRidesExercise {
             else {
                 // already got an event it shall be a START event
                 if (gotEventState.value() != null) {
-                    long secondsToEnd = Duration.between(gotEventState.value().eventTime, ride.eventTime).toSeconds();
-                    if (secondsToEnd > TWO_HOURS_SECONDS) {
+                    long secondsToEnd = Duration.between(gotEventState.value().eventTime, ride.eventTime).toMillis();
+                    if (secondsToEnd > TWO_HOUR_MILLIS) {
                         out.collect(ride.rideId);
                     }
                     updateTimer("delete", context, gotEventState.value().getEventTimeMillis());
@@ -154,8 +151,8 @@ public class LongRidesExercise {
         }
 
         private void updateTimer(String command, Context context, Long eventTime) {
-            long timerValue = TimeWindow.getWindowStartWithOffset(eventTime, 0, TWO_HOURS_SECONDS * 1000) + TWO_HOURS_SECONDS * 1000;
-            if (command == "start") {
+            long timerValue = TimeWindow.getWindowStartWithOffset(eventTime, 0, TWO_HOUR_MILLIS) + TWO_HOUR_MILLIS;
+            if ("start".equals(command)) {
                 context.timerService().registerEventTimeTimer(timerValue);
             }
             else {
